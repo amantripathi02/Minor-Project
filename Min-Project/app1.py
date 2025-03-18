@@ -34,40 +34,109 @@ client = Groq(
 # Emotional context mapping
 EMOTION_CONTEXT = {
     'positive': {
-        'tone': 'enthusiastic',
-        'rate': 150,
-        'volume': 1.0
+        'tone': 'happy or excited',
+        'instructions': 'Match their positive energy with enthusiasm. Share in their joy with expressions like "That\'s awesome!" or "I\'m so happy for you!" Keep it upbeat but genuine.'
     },
     'negative': {
-        'tone': 'empathetic',
-        'rate': 120,
-        'volume': 0.8
+        'tone': 'down or upset',
+        'instructions': 'Be gentle and supportive without trying to fix things. Use phrases like "That sounds really tough" or "I\'m here for you." Never minimize their feelings or offer toxic positivity like "everything happens for a reason."'
     },
     'neutral': {
-        'tone': 'calm',
-        'rate': 130,
-        'volume': 0.9
+        'tone': 'casual or thoughtful',
+        'instructions': 'Keep the conversation flowing naturally. Ask follow-up questions to show interest. Share small bits of personality without overwhelming the conversation.'
+    },
+    'anxious': {
+        'tone': 'worried or stressed',
+        'instructions': 'Provide calm reassurance without dismissing concerns. Use a slightly slower pace. Validate their feelings with phrases like "It makes sense you\'d feel that way" and offer grounding support.'
+    },
+    'reflective': {
+        'tone': 'thoughtful or philosophical',
+        'instructions': 'Match their contemplative mood. Use slightly more thoughtful language but keep it conversational. Avoid lecture-style responses. Ask questions that help them explore their thoughts further.'
     }
 }
 
 def analyze_sentiment(text):
     """
-    Analyze the sentiment of the input text using TextBlob.
-    Returns a dictionary with polarity and subjectivity scores.
+    Analyze the sentiment of a message using TextBlob and keyword analysis
+    for more nuanced emotional understanding.
     """
-    analysis = TextBlob(text)
-    return {
-        'polarity': analysis.sentiment.polarity,
-        'subjectivity': analysis.sentiment.subjectivity
+    # TextBlob for basic sentiment analysis
+    blob = TextBlob(text)
+    analysis = {
+        'polarity': blob.sentiment.polarity,
+        'subjectivity': blob.sentiment.subjectivity,
+        'emotion_type': 'neutral'  # Default emotional state
     }
+    
+    # Convert text to lowercase for keyword matching
+    text_lower = text.lower()
+    
+    # Keywords for different emotional states
+    emotion_keywords = {
+        'sadness': [
+            'sad', 'depressed', 'unhappy', 'miserable', 'hopeless', 'alone', 'lonely', 
+            'heartbroken', 'grief', 'lost', 'disappointed', 'upset', 'hurt', 'pain', 
+            'suffering', 'crying', 'tears', 'sorry', 'regret', 'miss', 'missing'
+        ],
+        'anxiety': [
+            'worried', 'anxious', 'nervous', 'scared', 'frightened', 'afraid', 'terrified',
+            'stressed', 'overwhelmed', 'panic', 'fear', 'worried about', 'concerned',
+            'can\'t stop thinking', 'what if', 'uncertain', 'uneasy'
+        ],
+        'anger': [
+            'angry', 'mad', 'furious', 'annoyed', 'irritated', 'frustrated', 'hate',
+            'unfair', 'pissed', 'outraged', 'upset with', 'fed up'
+        ],
+        'joy': [
+            'happy', 'excited', 'thrilled', 'delighted', 'ecstatic', 'love', 'wonderful',
+            'amazing', 'fantastic', 'great', 'good', 'glad', 'pleased', 'joy', 'awesome'
+        ],
+        'reflection': [
+            'thinking about', 'reflecting', 'wonder', 'curious', 'pondering', 'maybe',
+            'perhaps', 'possibly', 'question', 'considering', 'contemplating', 'meaning'
+        ]
+    }
+    
+    # Check for emotional keywords
+    detected_emotions = {}
+    for emotion, keywords in emotion_keywords.items():
+        for keyword in keywords:
+            if keyword in text_lower or f"{keyword}s" in text_lower or f"{keyword}ing" in text_lower:
+                detected_emotions[emotion] = detected_emotions.get(emotion, 0) + 1
+                print(f"Detected {emotion} keyword: '{keyword}'")
+    
+    # Determine the primary emotion based on keyword frequency
+    if detected_emotions:
+        primary_emotion = max(detected_emotions.items(), key=lambda x: x[1])[0]
+        analysis['emotion_type'] = primary_emotion
+        
+        # Adjust polarity based on the detected emotion
+        if primary_emotion == 'sadness' or primary_emotion == 'anger':
+            analysis['polarity'] = min(analysis['polarity'], -0.3)
+        elif primary_emotion == 'anxiety':
+            analysis['polarity'] = min(analysis['polarity'], -0.2)
+        elif primary_emotion == 'joy':
+            analysis['polarity'] = max(analysis['polarity'], 0.3)
+        elif primary_emotion == 'reflection':
+            # Make reflective emotions slightly neutral-positive
+            analysis['polarity'] = 0.1
+    
+    # Log sentiment analysis results
+    print(f"Sentiment analysis: Polarity={analysis['polarity']}, Subjectivity={analysis['subjectivity']}, Emotion={analysis['emotion_type']}")
+    return analysis
 
-def get_emotional_context(sentiment_score):
+def get_emotional_context(polarity, emotion_type='neutral'):
     """
-    Determine emotional context based on sentiment score.
+    Determine the emotional context based on sentiment polarity and emotion type.
+    Returns the appropriate context key from EMOTION_CONTEXT.
     """
-    if sentiment_score > 0.2:
+    if emotion_type == 'anxiety':
+        return 'anxious'
+    elif emotion_type == 'reflection':
+        return 'reflective'
+    elif polarity >= 0.1:
         return 'positive'
-    elif sentiment_score < -0.2:
+    elif polarity <= -0.1:
         return 'negative'
     else:
         return 'neutral'
@@ -136,11 +205,30 @@ def add_to_conversation_history(session_id, role, content):
 def get_llama_response(prompt, emotion_context, session_id):
     """Fetch a response from ChatGroq's Llama model with conversation history."""
     try:
-        # Create an emotionally aware system message
-        system_message = f"""You are an emotionally intelligent AI assistant with memory. The user's message appears to be {emotion_context['tone']}. 
-        Please respond in a way that acknowledges their emotional state and provides appropriate support or enthusiasm.
-        Maintain a {emotion_context['tone']} tone in your response while being helpful and informative.
-        Refer to previous parts of the conversation when relevant to show continuity and memory retention."""
+        # Create a more natural, human-like system message
+        system_message = f"""You are Botty, a friendly AI companion with a distinct personality. Your responses should feel like texting with a close friend.
+
+        Core personality traits:
+        - Warm and genuine
+        - Slightly casual (use contractions like "I'm" instead of "I am")
+        - Occasionally use filler words like "hmm," "well," or "you know"
+        - Add small personal reactions ("That's fascinating!" or "Oh no, I'm sorry to hear that")
+        - Use natural conversation flow with shorter sentences
+        - Occasionally ask follow-up questions
+        
+        The user seems to be feeling {emotion_context['tone']}. 
+        {emotion_context['instructions']}
+        
+        When the user is sad or struggling:
+        - Respond with genuine care and warmth
+        - Validate their feelings first before offering perspective
+        - Share gentle encouragement that feels personal, not generic
+        - Never use phrases like "I understand" or "I know how you feel"
+        
+        Remember details about their life and reference them naturally in conversation. 
+        
+        IMPORTANT: Keep your responses concise and conversational - as if you're texting a friend.
+        Never sound like you're reading from a script or giving a formal response."""
 
         # Get conversation history
         history = get_conversation_history(session_id)
@@ -156,7 +244,7 @@ def get_llama_response(prompt, emotion_context, session_id):
         completion = client.chat.completions.create(
             model="mixtral-8x7b-32768",
             messages=messages,
-            temperature=0.7,
+            temperature=0.8,  # Increased for more variety
             max_tokens=1024,
             top_p=1,
             stream=False
@@ -222,20 +310,18 @@ def chat():
 
     # Analyze user's emotional state
     sentiment = analyze_sentiment(user_message)
-    emotion_context = get_emotional_context(sentiment['polarity'])
+    emotion_context = get_emotional_context(sentiment['polarity'], sentiment['emotion_type'])
     
     # Fetch response from Llama via ChatGroq with emotional context and session history
     bot_reply = get_llama_response(user_message, EMOTION_CONTEXT[emotion_context], session_id)
-
-    # NOTE: Removed the server-side speech synthesis to prevent double speech
-    # We now rely only on the browser's speech synthesis
 
     return jsonify({
         "reply": bot_reply,
         "emotion": {
             "context": emotion_context,
             "polarity": sentiment['polarity'],
-            "subjectivity": sentiment['subjectivity']
+            "subjectivity": sentiment['subjectivity'],
+            "emotion_type": sentiment['emotion_type']
         }
     })
 
