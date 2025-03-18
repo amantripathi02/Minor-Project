@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chatbot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">
+      <h1>Chatbot</h1>
+      <div class="header-controls">
+        <button id="clearMemoryBtn" class="clear-memory-btn">Clear Memory</button>
+      </div>
+    </div>
+    <div class="chat-box" id="chatBox"></div>
+    <div class="chat-input-container">
+      <input type="text" id="messageInput" placeholder="Type your message...">
+      <button id="sendBtn">Send</button>
+      <button id="startListeningBtn" class="mic-button">Start Listening</button>
+      <button id="stopListeningBtn" class="mic-button stop">Stop Listening</button>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const chatBox = document.getElementById('chatBox');
+      const messageInput = document.getElementById('messageInput');
+      const sendBtn = document.getElementById('sendBtn');
+      const startListeningBtn = document.getElementById('startListeningBtn');
+      const stopListeningBtn = document.getElementById('stopListeningBtn');
+      const clearMemoryBtn = document.getElementById('clearMemoryBtn');
+      
+      // Initialize speech synthesis voices
+      let voices = [];
+      function populateVoiceList() {
+        voices = window.speechSynthesis.getVoices();
+        console.log(`Loaded ${voices.length} voices`);
+      }
+      
+      if ('speechSynthesis' in window) {
+        populateVoiceList();
+        
+        // Chrome requires waiting for the voiceschanged event
+        window.speechSynthesis.onvoiceschanged = populateVoiceList;
+      }
+      
+      // Load chat history when page loads
+      fetchChatHistory();
+
+      // Function to fetch chat history from the server
+      function fetchChatHistory() {
+        fetch('/history')
+          .then(response => response.json())
+          .then(data => {
+            if (data.history && data.history.length > 0) {
+              // Clear existing messages
+              chatBox.innerHTML = '';
+              
+              // Add each message to the chat box
+              data.history.forEach(message => {
+                const role = message.role;
+                const content = message.content;
+                
+                if (role === 'user') {
+                  addUserMessage(content);
+                } else if (role === 'assistant') {
+                  addBotMessage(content);
+                }
+              });
+              
+              // Scroll to bottom
+              chatBox.scrollTop = chatBox.scrollHeight;
+            }
+          })
+          .catch(error => console.error('Error fetching history:', error));
+      }
+
+      // Send message when send button is clicked
+      sendBtn.addEventListener('click', sendMessage);
+      
+      // Send message when Enter key is pressed
+      messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          sendMessage();
+        }
+      });
+      
+      // Clear memory button
+      clearMemoryBtn.addEventListener('click', () => {
+        const message = "clear memory";
+        sendToServer(message);
+        // Clear the chat box UI as well
+        chatBox.innerHTML = '';
+      });
+
+      // Function to send message to server
+      function sendMessage() {
+        const message = messageInput.value.trim();
+        if (message) {
+          addUserMessage(message);
+          sendToServer(message);
+          messageInput.value = '';
+        }
+      }
+
+      // Function to send message to server and handle response
+      function sendToServer(message) {
+        fetch('/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ message })
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (message.toLowerCase() !== "clear memory") {
+            addBotMessage(data.reply, data.emotion);
+            // Use browser's speech synthesis for bot's response
+            speakInBrowser(data.reply);
+          } else {
+            addSystemMessage(data.reply);
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          addBotMessage('Sorry, there was an error processing your request.');
+        });
+      }
+
+      // Add user message to chat box
+      function addUserMessage(message) {
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('chat-message', 'user-message');
+        messageElement.textContent = message;
+        chatBox.appendChild(messageElement);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+
+      // Add bot message to chat box
+      function addBotMessage(message, emotion) {
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('chat-message', 'bot-message');
+        
+        // Add emotion class if available
+        if (emotion && emotion.context) {
+          messageElement.classList.add(`emotion-${emotion.context}`);
+        }
+        
+        messageElement.innerHTML = message;
+        chatBox.appendChild(messageElement);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+      
+      // Add system message (like "Memory cleared")
+      function addSystemMessage(message) {
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('chat-message', 'system-message');
+        messageElement.textContent = message;
+        chatBox.appendChild(messageElement);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+
+      // Speech synthesis for bot responses using browser's speech synthesis API
+      function speakInBrowser(text) {
+        if (!('speechSynthesis' in window)) return;
+        
+        // Cancel any ongoing speech
+        window.speechSynthesis.cancel();
+        
+        // Clean the text (remove HTML tags)
+        const cleanText = text.replace(/<[^>]*>/g, '').trim();
+        
+        if (cleanText.length === 0) return;
+        
+        // Break text into smaller chunks (sentences or phrases)
+        const textChunks = splitTextIntoChunks(cleanText);
+        console.log(`Speaking text in ${textChunks.length} chunks`);
+        
+        // Disable speech recognition while bot is speaking
+        if (recognition && isListening) {
+          try {
+            recognition.stop();
+            isListening = false;
+            updateListeningButtons(false);
+          } catch (e) {
+            console.error("Error stopping recognition:", e);
+          }
+        }
+        
+        // Get the voice to use
+        let selectedVoice = null;
+        if (voices.length > 0) {
+          // Try to find a female English voice, otherwise use the first available
+          const englishVoice = voices.find(voice => 
+            voice.lang.includes('en-') && 
+            (voice.name.includes('Female') || voice.name.includes('Samantha'))
+          );
+          selectedVoice = englishVoice || voices[0];
+          console.log("Using voice:", selectedVoice ? selectedVoice.name : "default");
+        }
+        
+        // Create and speak each chunk sequentially
+        let currentIndex = 0;
+        
+        function speakNextChunk() {
+          if (currentIndex >= textChunks.length) {
+            console.log("Finished speaking all chunks");
+            return;
+          }
+          
+          const chunk = textChunks[currentIndex];
+          console.log(`Speaking chunk ${currentIndex + 1}/${textChunks.length}: "${chunk.substring(0, 30)}..."`);
+          
+          const utterance = new SpeechSynthesisUtterance(chunk);
+          
+          // Set voice properties
+          utterance.rate = 0.9;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+          
+          if (selectedVoice) {
+            utterance.voice = selectedVoice;
+          }
+          
+          // Handle events
+          utterance.onend = () => {
+            currentIndex++;
+            setTimeout(speakNextChunk, 50); // Small delay between chunks
+          };
+          
+          utterance.onerror = (event) => {
+            console.error(`Speech error in chunk ${currentIndex}:`, event);
+            currentIndex++;
+            setTimeout(speakNextChunk, 50);
+          };
+          
+          // Speak the current chunk
+          window.speechSynthesis.speak(utterance);
+        }
+        
+        // Start speaking the first chunk
+        speakNextChunk();
+      }
+      
+      // Split text into manageable chunks for more reliable speech
+      function splitTextIntoChunks(text) {
+        // First try to split by sentences
+        const sentenceBreaks = text.split(/(?<=[.!?])\s+/);
+        
+        // If sentences are too long, break them into smaller chunks
+        const chunks = [];
+        const maxChunkLength = 100; // Maximum characters per chunk
+        
+        sentenceBreaks.forEach(sentence => {
+          if (sentence.length <= maxChunkLength) {
+            chunks.push(sentence);
+          } else {
+            // For long sentences, split by commas, colons, or semicolons
+            const phraseBreaks = sentence.split(/(?<=[,;:])\s+/);
+            
+            if (phraseBreaks.length > 1) {
+              // If we can split by phrases, do that
+              phraseBreaks.forEach(phrase => {
+                if (phrase.length <= maxChunkLength) {
+                  chunks.push(phrase);
+                } else {
+                  // If even phrases are too long, split into fixed-length chunks
+                  for (let i = 0; i < phrase.length; i += maxChunkLength) {
+                    chunks.push(phrase.substring(i, i + maxChunkLength));
+                  }
+                }
+              });
+            } else {
+              // If no phrase breaks, just split into fixed-length chunks
+              for (let i = 0; i < sentence.length; i += maxChunkLength) {
+                chunks.push(sentence.substring(i, i + maxChunkLength));
+              }
+            }
+          }
+        });
+        
+        return chunks.filter(chunk => chunk.trim().length > 0);
+      }
+
+      // Speech recognition setup
+      let recognition = null;
+      let isListening = false;
+      
+      if ('webkitSpeechRecognition' in window) {
+        recognition = new webkitSpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US'; // Set language explicitly
+        
+        recognition.onstart = () => {
+          console.log('Speech recognition started');
+          isListening = true;
+        };
+        
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          console.log('Recognized speech:', transcript);
+          messageInput.value = transcript;
+          sendMessage();
+        };
+        
+        recognition.onerror = (event) => {
+          console.error('Speech recognition error:', event.error);
+          isListening = false;
+          updateListeningButtons();
+        };
+        
+        recognition.onend = () => {
+          console.log('Speech recognition ended');
+          isListening = false;
+          updateListeningButtons();
+        };
+      } else {
+        console.log('Speech recognition not supported in this browser');
+        startListeningBtn.disabled = true;
+        stopListeningBtn.disabled = true;
+      }
+
+      // Start listening button
+      startListeningBtn.addEventListener('click', startListening);
+      
+      // Stop listening button
+      stopListeningBtn.addEventListener('click', stopListening);
+      
+      function startListening() {
+        if (recognition && !isListening) {
+          // First stop any ongoing speech synthesis
+          if (window.speechSynthesis.speaking) {
+            window.speechSynthesis.cancel();
+          }
+          
+          try {
+            recognition.start();
+            updateListeningButtons(true);
+            addSystemMessage("Listening...");
+          } catch (error) {
+            console.error('Error starting recognition:', error);
+          }
+        }
+      }
+      
+      function stopListening() {
+        if (recognition && isListening) {
+          try {
+            recognition.stop();
+            isListening = false;
+            updateListeningButtons(false);
+          } catch (error) {
+            console.error('Error stopping recognition:', error);
+          }
+        }
+      }
+      
+      function updateListeningButtons(listening) {
+        if (listening) {
+          startListeningBtn.style.display = 'none';
+          stopListeningBtn.style.display = 'inline-block';
+        } else {
+          startListeningBtn.style.display = 'inline-block';
+          stopListeningBtn.style.display = 'none';
+        }
+      }
+      
+      // Initially hide stop button
+      updateListeningButtons(false);
+    });
+  </script>
+</body>
+</html>
